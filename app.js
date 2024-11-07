@@ -2,6 +2,7 @@ const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const cookieParser = require("cookie-parser");
+const rateLimit = require("express-rate-limit");
 const { createUser, findUserByUsername } = require("./models/user");
 const app = express();
 const port = 3000;
@@ -14,6 +15,19 @@ app.use(express.urlencoded({ extended: true })); // For form data parsing
 
 // JWT Secret key (store this securely, not hardcoded in production)
 const JWT_SECRET = "your_jwt_secret_key";
+
+// Apply rate limiting to login and refresh token endpoints
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // Limit to 5 requests per window
+  message: "Too many login attempts, please try again later.",
+});
+
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 3, // Limit to 3 requests per window
+  message: "Too many refresh requests, please try again later.",
+});
 
 // Utility to generate JWT
 const generateToken = (user) => {
@@ -41,7 +55,7 @@ app.get("/", (req, res) => {
   });
 });
 
-app.post("/login", async (req, res) => {
+app.post("/login", loginLimiter, async (req, res) => {
   const { username, password } = req.body;
 
   const user = await findUserByUsername(username);
@@ -61,19 +75,19 @@ app.post("/login", async (req, res) => {
   const refreshToken = generateRefreshToken(user);
 
   // Set JWT as a secure, HttpOnly cookie for access token
-  res.cookie('auth_token', token, {
-    httpOnly: true,        // Prevent access to the cookie from JavaScript
-    secure: process.env.NODE_ENV === 'production',  // Use "secure" only in production (HTTPS)
-    sameSite: 'Strict',    // Ensure the cookie is sent only to the same site
-    maxAge: 3600000        // Token expiration in 1 hour
+  res.cookie("auth_token", token, {
+    httpOnly: true, // Prevent access to the cookie from JavaScript
+    secure: process.env.NODE_ENV === "production", // Use "secure" only in production (HTTPS)
+    sameSite: "Strict", // Ensure the cookie is sent only to the same site
+    maxAge: 3600000, // Token expiration in 1 hour
   });
 
   // Set refresh token as a secure, HttpOnly cookie
-  res.cookie('refresh_token', refreshToken, {
-    httpOnly: true, 
-    secure: process.env.NODE_ENV === 'production', 
-    sameSite: 'Strict', 
-    maxAge: 604800000 // Refresh token expiration in 7 days
+  res.cookie("refresh_token", refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Strict",
+    maxAge: 604800000, // Refresh token expiration in 7 days
   });
 
   res.json({ message: "Logged in successfully" });
@@ -81,12 +95,12 @@ app.post("/login", async (req, res) => {
 
 app.get("/logout", (req, res) => {
   // Clear both the access token and refresh token cookies
-  res.clearCookie('auth_token');
-  res.clearCookie('refresh_token');
+  res.clearCookie("auth_token");
+  res.clearCookie("refresh_token");
   res.json({ message: "Logged out successfully" });
 });
 
-app.post("/refresh-token", (req, res) => {
+app.post("/refresh-token", refreshLimiter, async (req, res) => {
   const refreshToken = req.cookies.refresh_token;
   if (!refreshToken) {
     return res.status(403).json({ message: "No refresh token provided" });
@@ -95,7 +109,9 @@ app.post("/refresh-token", (req, res) => {
   // Verify the refresh token
   jwt.verify(refreshToken, JWT_SECRET, (err, decoded) => {
     if (err) {
-      return res.status(403).json({ message: "Invalid or expired refresh token" });
+      return res
+        .status(403)
+        .json({ message: "Invalid or expired refresh token" });
     }
 
     // Generate a new access token
